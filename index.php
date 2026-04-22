@@ -54,7 +54,10 @@ function reencodeImageAsJpeg(string $sourcePath, string $destPath, int $maxW, in
         return false;
     }
     $type = exif_imagetype($sourcePath);
-    $src  = match ($type) {
+    if ($type === false) {
+        return false;
+    }
+    $src = match ($type) {
         IMAGETYPE_JPEG => imagecreatefromjpeg($sourcePath),
         IMAGETYPE_PNG  => imagecreatefrompng($sourcePath),
         IMAGETYPE_GIF  => imagecreatefromgif($sourcePath),
@@ -139,7 +142,9 @@ function extractPhoto(
         if ($tmp === false) {
             return null;
         }
-        file_put_contents($tmp, $binary);
+        if (file_put_contents($tmp, $binary) === false) {
+            return null;
+        }
         $result = processPhoto($tmp, $uploadsDir, $maxW, $maxH, $quality);
         @unlink($tmp);
         return $result;
@@ -298,6 +303,7 @@ function pasteZoneHtml(string $id): string
         '<div class="paste-zone-label">or paste:</div>' .
         '<div class="paste-zone" id="pz-' . $eid . '"' .
              ' onclick="this.querySelector(\'.pz-editable\').focus()"' .
+             ' aria-label="Paste image from clipboard"' .
              ' title="Click here, then paste an image (Ctrl/Cmd+V)">' .
             '<span class="pz-editable" id="pz-' . $eid . '-editable" contenteditable="true" tabindex="0"></span>' .
             '<div class="pz-hint" id="pz-' . $eid . '-hint"><span>📋</span>Paste<br>image</div>' .
@@ -473,7 +479,7 @@ $csrfToken = (string) $_SESSION['csrf_token'];
                             data-full-src="<?= e((string) $wish['photo_path']) ?>"
                         >
                     <?php else: ?>
-                        <span class="placeholder">no<br>photo</span>
+                        <span class="placeholder">no photo</span>
                     <?php endif; ?>
                 </div>
                 <div>
@@ -608,10 +614,11 @@ function initPasteZone(pzId, fileInputId) {
         });
     }
 
-    // Block typing; allow only paste shortcut and Tab
+    // Block typing; allow only paste shortcut, Tab, Escape, and arrow/navigation keys
     editable.addEventListener('keydown', function (e) {
         var isPaste = (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v';
-        if (!isPaste && e.key !== 'Tab') { e.preventDefault(); }
+        var isNav   = ['Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].indexOf(e.key) !== -1;
+        if (!isPaste && !isNav) { e.preventDefault(); }
     });
 
     editable.addEventListener('paste', function (event) {
