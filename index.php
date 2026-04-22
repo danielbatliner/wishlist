@@ -6,7 +6,7 @@ $uploadsDir = $dbDir . '/uploads';
 $dbPath = $dbDir . '/wishlist.sqlite';
 
 if (!is_dir($uploadsDir)) {
-    mkdir($uploadsDir, 0775, true);
+    mkdir($uploadsDir, 0755, true);
 }
 
 $db = new PDO('sqlite:' . $dbPath);
@@ -24,7 +24,9 @@ $db->exec(
 
 function redirectToHome(): never
 {
-    header('Location: /');
+    $basePath = rtrim(str_replace('\\', '/', dirname((string) ($_SERVER['PHP_SELF'] ?? '/'))), '/');
+    $location = $basePath !== '' ? $basePath . '/' : '/';
+    header('Location: ' . $location);
     exit;
 }
 
@@ -85,7 +87,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                     $fileName = bin2hex(random_bytes(16)) . '.' . $extension;
                     $destination = $uploadsDir . '/' . $fileName;
-                    if (@getimagesizefromstring($binary) !== false && file_put_contents($destination, $binary) !== false) {
+                    if (getimagesizefromstring($binary) !== false && file_put_contents($destination, $binary) !== false) {
                         $photoPath = 'data/uploads/' . $fileName;
                     }
                 }
@@ -114,7 +116,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($wish && !empty($wish['photo_path'])) {
                 $photoAbsolute = __DIR__ . '/' . ltrim((string) $wish['photo_path'], '/');
                 if (is_file($photoAbsolute) && str_starts_with(realpath($photoAbsolute) ?: '', realpath($uploadsDir) ?: '')) {
-                    @unlink($photoAbsolute);
+                    unlink($photoAbsolute);
                 }
             }
 
