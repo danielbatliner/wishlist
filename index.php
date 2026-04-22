@@ -1,9 +1,11 @@
 <?php
 declare(strict_types=1);
+session_start();
 
 $dbDir = __DIR__ . '/data';
 $uploadsDir = $dbDir . '/uploads';
 $dbPath = $dbDir . '/wishlist.sqlite';
+$maxImageBytes = 5 * 1024 * 1024;
 
 if (!is_dir($uploadsDir)) {
     mkdir($uploadsDir, 0755, true);
@@ -11,6 +13,9 @@ if (!is_dir($uploadsDir)) {
 
 $db = new PDO('sqlite:' . $dbPath);
 $db->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+if (is_file($dbPath)) {
+    chmod($dbPath, 0640);
+}
 $db->exec(
     'CREATE TABLE IF NOT EXISTS wishes (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,7 +29,7 @@ $db->exec(
 
 function redirectToHome(): never
 {
-    $basePath = rtrim(str_replace('\\', '/', dirname((string) ($_SERVER['PHP_SELF'] ?? '/'))), '/');
+    $basePath = rtrim(str_replace('\\', '/', dirname((string) ($_SERVER['SCRIPT_NAME'] ?? '/'))), '/');
     $location = $basePath !== '' ? $basePath . '/' : '/';
     header('Location: ' . $location);
     exit;
@@ -50,6 +55,12 @@ function sanitizeLink(string $link): ?string
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $csrfToken = (string) ($_POST['csrf_token'] ?? '');
+    if (!hash_equals((string) ($_SESSION['csrf_token'] ?? ''), $csrfToken)) {
+        http_response_code(400);
+        exit('Ungültige Anfrage.');
+    }
+
     $action = $_POST['action'] ?? '';
 
     if ($action === 'create') {
@@ -64,31 +75,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             if (is_array($photoFile) && ($photoFile['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_OK) {
                 $tmpPath = (string) $photoFile['tmp_name'];
-                $mimeType = mime_content_type($tmpPath) ?: '';
-                if (str_starts_with($mimeType, 'image/')) {
-                    $extension = image_type_to_extension((int) (exif_imagetype($tmpPath) ?: IMAGETYPE_JPEG), false) ?: 'jpg';
+                $imageType = exif_imagetype($tmpPath);
+                $allowedTypes = [
+                    IMAGETYPE_PNG => 'png',
+                    IMAGETYPE_JPEG => 'jpg',
+                    IMAGETYPE_GIF => 'gif',
+                    IMAGETYPE_WEBP => 'webp',
+                ];
+                $fileSize = (int) ($photoFile['size'] ?? 0);
+                if ($imageType !== false && isset($allowedTypes[$imageType]) && $fileSize > 0 && $fileSize <= $maxImageBytes) {
+                    $extension = $allowedTypes[$imageType];
                     $fileName = bin2hex(random_bytes(16)) . '.' . $extension;
                     $destination = $uploadsDir . '/' . $fileName;
                     if (move_uploaded_file($tmpPath, $destination)) {
                         $photoPath = 'data/uploads/' . $fileName;
                     }
                 }
-            } elseif ($pastedPhoto !== '' && preg_match('#^data:image/(png|jpeg|jpg|webp|gif);base64,#i', $pastedPhoto)) {
-                [$header, $content] = explode(',', $pastedPhoto, 2);
-                $binary = base64_decode($content, true);
-                if ($binary !== false) {
-                    preg_match('#^data:image/([a-z0-9+]+);base64$#i', $header, $matches);
-                    $extension = strtolower($matches[1] ?? 'png');
+            } elseif ($pastedPhoto !== '' && preg_match('#^data:image/(png|jpeg|jpg|webp|gif);base64,#i', $pastedPhoto, $pastedMatches)) {
+                [, $content] = explode(',', $pastedPhoto, 2);
+                if (strlen($content) <= (int) ceil($maxImageBytes * 1.4)) {
+                    $binary = base64_decode($content, true);
+                } else {
+                    $binary = false;
+                }
+                if ($binary !== false && strlen($binary) <= $maxImageBytes) {
+                    $extension = strtolower($pastedMatches[1]);
                     if ($extension === 'jpeg') {
                         $extension = 'jpg';
                     }
-                    if (!in_array($extension, ['png', 'jpg', 'gif', 'webp'], true)) {
-                        $extension = 'png';
-                    }
-                    $fileName = bin2hex(random_bytes(16)) . '.' . $extension;
-                    $destination = $uploadsDir . '/' . $fileName;
-                    if (getimagesizefromstring($binary) !== false && file_put_contents($destination, $binary) !== false) {
-                        $photoPath = 'data/uploads/' . $fileName;
+                    $imageInfo = getimagesizefromstring($binary);
+                    $expectedMime = 'image/' . ($extension === 'jpg' ? 'jpeg' : $extension);
+                    if ($imageInfo !== false && isset($imageInfo['mime']) && strtolower((string) $imageInfo['mime']) === $expectedMime) {
+                        $fileName = bin2hex(random_bytes(16)) . '.' . $extension;
+                        $destination = $uploadsDir . '/' . $fileName;
+                        if (file_put_contents($destination, $binary) !== false) {
+                            $photoPath = 'data/uploads/' . $fileName;
+                        }
                     }
                 }
             }
@@ -115,8 +137,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             if ($wish && !empty($wish['photo_path'])) {
                 $photoAbsolute = __DIR__ . '/' . ltrim((string) $wish['photo_path'], '/');
-                if (is_file($photoAbsolute) && str_starts_with(realpath($photoAbsolute) ?: '', realpath($uploadsDir) ?: '')) {
-                    unlink($photoAbsolute);
+                $photoRealPath = realpath($photoAbsolute);
+                $uploadsRealPath = realpath($uploadsDir);
+                if ($photoRealPath !== false && $uploadsRealPath !== false && is_file($photoRealPath) && str_starts_with($photoRealPath, $uploadsRealPath . '/')) {
+                    unlink($photoRealPath);
                 }
             }
 
@@ -128,12 +152,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$wishes = $db->query('SELECT id, name, link, notes, photo_path, created_at FROM wishes ORDER BY datetime(created_at) DESC, id DESC')->fetchAll(PDO::FETCH_ASSOC);
+$wishes = $db->query('SELECT id, name, link, notes, photo_path, created_at FROM wishes ORDER BY created_at DESC, id DESC')->fetchAll(PDO::FETCH_ASSOC);
 
 function e(string $value): string
 {
     return htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 }
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrfToken = (string) $_SESSION['csrf_token'];
 ?>
 <!doctype html>
 <html lang="de">
@@ -174,6 +203,7 @@ function e(string $value): string
     <summary>Neuen Wunsch hinzufügen</summary>
     <form method="post" enctype="multipart/form-data">
         <input type="hidden" name="action" value="create">
+        <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>">
         <input type="hidden" id="pasted_photo" name="pasted_photo" value="">
 
         <label>Foto (Upload)
@@ -234,6 +264,7 @@ function e(string $value): string
 
             <form method="post" onsubmit="return confirm('Wunsch wirklich löschen?');">
                 <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="csrf_token" value="<?= e($csrfToken) ?>">
                 <input type="hidden" name="id" value="<?= (int) $wish['id'] ?>">
                 <button type="submit" class="delete-button">Löschen</button>
             </form>
