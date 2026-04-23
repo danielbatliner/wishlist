@@ -4,9 +4,9 @@ A simple personal wishlist web app built with PHP and SQLite. No external depend
 
 ## Features
 
-- Add wishes with a name, one or more links, notes, and a photo
-- Upload a photo via file picker or paste one from the clipboard (desktop and iPad)
-- Multiple links per wish — enter one URL per line
+- Add wishes with a name, links, notes, and a photo
+- Upload a photo via file picker or paste one from the clipboard
+- URLs in notes get converted to links. 
 - Delete wishes
 - All data stored locally in a SQLite database
 
